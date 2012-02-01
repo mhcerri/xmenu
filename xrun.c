@@ -11,6 +11,7 @@
 #include "util.h"
 #include "screen.h"
 #include "complete.h"
+#include "extern_complete.h"
 
 /*
  * TODO: loop to get the keyboard
@@ -37,6 +38,7 @@ char buffer[64*1024] = "";
 int cursor = 0;
 int highlight = 5;
 int loop = 1;
+struct list *list = NULL;
 
 // TODO add a 2nd step to convert these value to a color value
 const char *normal_bg_color;
@@ -261,10 +263,17 @@ void handle_keypress(struct x_context *xc, xcb_key_press_event_t *e)
 		return;
 	case XK_Tab:
 		len = strlen(buffer);
-		if (!complete(buffer, sizeof(buffer))) {
-			highlight = len;
-			cursor = strlen(buffer);
+		if (list == NULL || highlight == -1) {
+			free_list(list);
+			list = extern_complete("xrun_complete", buffer);
 		}
+		if (next(list)) {
+			strcpy(buffer, list->cur->name);
+			cursor = strlen(buffer);;
+			if (highlight == -1)
+				highlight = len;
+		}
+
 		return;
 	}
 
@@ -378,6 +387,7 @@ int main(int argc, char **argv)
 	}
 
 exit:
+	free_list(list);
 	xcb_ungrab_keyboard(xc.conn, XCB_TIME_CURRENT_TIME);
 	cleanup_x_context(&xc);
 	return rc;

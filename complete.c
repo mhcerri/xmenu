@@ -78,17 +78,3 @@ int complete_dir(char *buffer, size_t size, const char *dirpath)
 	return 1;
 }
 
-int complete_(char *buffer, size_t size)
-{
-	size_t len = strlen(buffer);
-	const char **it;
-
-	for (it = words; *it; it++) {
-		if (strncmp(buffer, *it, len) == 0) {
-			strncpy(buffer + len, *it + len, size - len);
-			return 0;
-		}
-	}
-	return 1;
-}
-
