@@ -42,7 +42,7 @@ struct list *extern_complete(const char *cmd, const char *input)
 		close(fds[0]);
 		//execl(cmd, cmd, input, NULL);
 		char b[1024];
-		sprintf(b, "%s %s", cmd, input);
+		sprintf(b, "%s \"%s\"", cmd, input);
 		execl("/bin/sh", "sh", "-c", b, NULL);
 		exit(1);
 	}

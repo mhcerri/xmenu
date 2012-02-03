@@ -14,10 +14,9 @@
 #include "extern_complete.h"
 
 /*
+ * TODO: completion
  * TODO: loop to get the keyboard
  * TODO: add awesome copyright in screen.c
- * TODO: change name: xrun? irun? i3run? execx?
- * TODO: completion
  * TODO: caps lock and num lock
  * TODO: option list.
  * TODO: show part completed.
@@ -30,7 +29,7 @@
  * TODO: fix randr
  */
 
-char *prompt = "Prompt: ";
+char *prompt = "> ";
 int border = 2; // TODO maybe margin?
 int shift_down = 0;
 int numlock_down = 0;
@@ -265,16 +264,26 @@ void handle_keypress(struct x_context *xc, xcb_key_press_event_t *e)
 		len = strlen(buffer);
 		if (list == NULL || highlight == -1) {
 			free_list(list);
-			list = extern_complete("xrun_complete", buffer);
+			list = extern_complete("complete.sh", buffer);
 		}
 		if (next(list)) {
-			strcpy(buffer, list->cur->name);
-			cursor = strlen(buffer);;
+			//strcpy(buffer, list->cur->name);
 			if (highlight == -1)
 				highlight = len;
+			char *it;
+			for (it = buffer; *it; it++)
+				;
+			for(; it != buffer; it--) {
+				if (isspace(*it)) {
+					it++;
+					break;
+				}
+			}
+			strcpy(it, list->cur->name);
+			cursor = strlen(buffer);;
 		}
 
-		return;
+		return; 
 	}
 
 	/* shift-dependent keys */
