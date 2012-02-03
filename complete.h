@@ -13,7 +13,7 @@ struct list {
 };
 
 void free_list(struct list *list);
-struct list *extern_complete(const char *cmd, const char *input);
+struct list *complete(const char *cmd, const char *input);
 static inline struct node *next(struct list *list) {
 	if (list == NULL)
 		return NULL;

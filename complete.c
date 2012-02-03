@@ -24,7 +24,30 @@ void free_list(struct list *list)
 	free(list);
 }
 
-struct list *extern_complete(const char *cmd, const char *input)
+static const char *replace_cmd(const char *pattern, const char *placeholder,
+		const char *str)
+{
+	/* TODO improve */
+	static char cmd[1024];
+	size_t len = 0, placeholder_len = strlen(placeholder);
+	const char *tok = pattern;
+
+	cmd[0] = '\0';
+	while (tok && *tok) {
+		const char *end = strstr(tok, placeholder);
+		if (end == NULL) {
+			snprintf(cmd + len, sizeof(cmd) - len, "%s", tok);
+			break;
+		}
+		len += snprintf(cmd + len, sizeof(cmd) - len, "%.*s%s",
+				(int) (end - tok), tok, str);
+		tok = end + placeholder_len;
+	}
+	return cmd;
+}
+
+
+struct list *complete(const char *cmd, const char *input)
 {
 	/* resouces that must be released */
 	char *line = NULL;
@@ -43,10 +66,8 @@ struct list *extern_complete(const char *cmd, const char *input)
 	if (pid == 0) {
 		dup2(fds[1], 1);
 		close(fds[0]);
-		//execl(cmd, cmd, input, NULL);
-		char b[1024];
-		sprintf(b, "%s \"%s\"", cmd, input);
-		execl("/bin/sh", "sh", "-c", b, NULL);
+		execl("/bin/sh", "sh", "-c", replace_cmd(cmd, "%s", input),
+					NULL);
 		exit(1);
 	}
 

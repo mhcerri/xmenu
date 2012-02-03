@@ -12,9 +12,7 @@
 #include "complete.h"
 
 /*
- * TODO: completion
- * TODO: loop to get the keyboard
- * TODO: add awesome copyright in screen.c
+ * TODO: args
  * TODO: caps lock and num lock
  * TODO: option list.
  * TODO: show part completed.
@@ -30,7 +28,7 @@
 /* configs */
 int border = 2;
 const char *prompt = "> ";
-const char *complete_cmd = "complete.sh";
+const char *complete_cmd = NULL;
 const char *font_name = "-*-fixed-medium-r-normal-*-13-*-*-*-*-*-iso8859-*";
 const char *normal_bg_color = "#000000";
 const char *normal_fg_color = "#ffffff";
@@ -101,6 +99,31 @@ int init_x()
 
 	return 0;
 }
+
+int grab_keyboard()
+{
+	long tries = 1000;
+	for (; tries; tries--) {
+		xcb_grab_keyboard_cookie_t grabc = xcb_grab_keyboard(
+				xc.conn, 1, xc.screen->root,
+				XCB_TIME_CURRENT_TIME, XCB_GRAB_MODE_ASYNC,
+				XCB_GRAB_MODE_ASYNC);
+		xcb_grab_keyboard_reply_t *grabr = xcb_grab_keyboard_reply(
+				xc.conn, grabc, NULL);
+		if (grabr) {
+			int status = grabr->status;
+			free(grabr);
+			if (!status) {
+				break;
+			}
+		}
+		usleep(1000);
+	}
+	xcb_flush(xc.conn);
+	return (tries <= 0);
+}
+
+
 
 void handle_expose(xcb_expose_event_t *e)
 {
@@ -199,10 +222,12 @@ int special_keypress(xcb_key_press_event_t *e)
 		highlight = -1;
 		break;
 	case XK_Tab:
+		if (complete_cmd == NULL)
+			break;
 		len = strlen(buffer);
 		if (list == NULL || highlight == -1) {
 			free_list(list);
-			list = extern_complete(complete_cmd, buffer);
+			list = complete(complete_cmd, buffer);
 		}
 		if (next(list)) {
 			if (highlight == -1)
@@ -219,8 +244,7 @@ int special_keypress(xcb_key_press_event_t *e)
 			strcpy(it, list->cur->name);
 			cursor = strlen(buffer);;
 		}
-
-		break; 
+		break;
 	default:
 		return 1;
 	}
@@ -275,32 +299,24 @@ int main(int argc, char **argv)
 	int rc = 0;
 
 	/* TODO Parse command line options */
+	int i;
+	for (i = 1; i < argc; i++) {
+		if (strcmp("-c", argv[i]) == 0) {
+			if ((i + 1) >= argc) {
+				fprintf(stderr, "\"%s\" requires an "
+						"argument.\n", argv[i]);
+				goto error;
+			}
+			complete_cmd = argv[++i];
+		}
+	}
 
 	/* Initialize X context */
 	memset(&xc, 0, sizeof(xc));
 	if (init_x())
 		goto error;
-
-	/* Grab the keyboard */
-	/* TODO add a limit */
 	handle_expose(NULL);
-	while (1) {
-		xcb_grab_keyboard_cookie_t grabc = xcb_grab_keyboard(
-				xc.conn, 1, xc.screen->root,
-				XCB_TIME_CURRENT_TIME, XCB_GRAB_MODE_ASYNC,
-				XCB_GRAB_MODE_ASYNC);
-		xcb_grab_keyboard_reply_t *grabr = xcb_grab_keyboard_reply(
-				xc.conn, grabc, NULL);
-		if (grabr) {
-			int status = grabr->status;
-			free(grabr);
-			if (!status) {
-				break;
-			}
-		}
-		usleep(1000);
-	}
-	xcb_flush(xc.conn);
+	grab_keyboard();
 
 	/* Event loop */
 	xcb_generic_event_t *event;
