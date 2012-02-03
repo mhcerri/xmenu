@@ -1,7 +1,7 @@
-#include "util.h"
+#include <stdlib.h>
 #include <string.h>
 #include <xcb/xcb.h>
-#include "common.h"
+#include "util.h"
 
 xcb_char2b_t* convert_ascii_to_char2b(const char *ascii)
 {

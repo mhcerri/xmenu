@@ -6,12 +6,10 @@
 #include <xcb/xcb.h>
 #include <xcb/xcb_keysyms.h>
 #include <X11/keysym.h>
-#include "common.h"
 #include "draw.h"
 #include "util.h"
 #include "screen.h"
 #include "complete.h"
-#include "extern_complete.h"
 
 /*
  * TODO: completion
@@ -29,144 +27,82 @@
  * TODO: fix randr
  */
 
-char *prompt = "> ";
-int border = 2; // TODO maybe margin?
+/* configs */
+int border = 2;
+const char *prompt = "> ";
+const char *complete_cmd = "complete.sh";
+const char *font_name = "-*-fixed-medium-r-normal-*-13-*-*-*-*-*-iso8859-*";
+const char *normal_bg_color = "#000000";
+const char *normal_fg_color = "#ffffff";
+const char *prompt_fg_color = "#285577";
+const char *hlight_bg_color = "#285577";
+const char *hlight_fg_color = "#ffffff";
+
+/* state vars */
+int loop = 1;
+struct x_context xc;
+struct geom geom;
+xcb_window_t window;
 int shift_down = 0;
 int numlock_down = 0;
-char buffer[64*1024] = "";
 int cursor = 0;
 int highlight = 5;
-int loop = 1;
+char buffer[64*1024] = "";
 struct list *list = NULL;
 
-// TODO add a 2nd step to convert these value to a color value
-const char *normal_bg_color;
-const char *normal_fg_color;
-const char *prompt_fg_color;
-const char *hlight_bg_color;
-const char *hlight_fg_color;
 
-int parse_opts(struct x_context *xc, int argc, char **argv)
-{
-	/* TODO stub */
-	/* TODO load the default values */
-	xc->config.font = "-*-fixed-medium-r-normal-*-13-*-*-*-*-*-iso8859-*";
-	//xc->config.font = "-*-fixed-medium-r-normal-*-20-*-*-*-*-*-iso8859-*";
-	//xc->config.font = "-*-lucida-medium-r-normal-*-20-*-*-*-*-*-iso8859-*";
-	normal_bg_color = "#000000";
-	normal_fg_color = "#ffffff";
-	prompt_fg_color = "#285577";
-	hlight_bg_color = "#285577";
-	hlight_fg_color = "#ffffff";
-	return 0;
-}
-
-void show_help(FILE *out)
-{
-	fprintf(out, "TODO: help\n");
-}
-
-int init_window(struct x_context *xc)
+int init_x()
 {
 	uint32_t mask, values[3];
 
-	xc->w = xc->screen.w;
-	xc->h = xc->font.height + 2 * border;
-	int d = get_depth(xc); /* this is important to pixmap... */
+	/* Initialize X */
+	if (init_x_context(&xc))
+		return 1;
+	if (load_font(&xc, font_name))
+		return 1;
+
+	/* Define geom */
+	if (get_screen_geom(&xc, &geom))
+		return 1;
+	geom.h = xc.font.height + 2 * border;
 
 	/* Create the window */
 	mask = XCB_CW_BACK_PIXEL |
 		XCB_CW_OVERRIDE_REDIRECT |
 		XCB_CW_EVENT_MASK;
-	values[0] = xc->screen.xscreen->white_pixel;
+	values[0] = xc.screen->white_pixel;
 	values[1] = 1;
 	values[2] = XCB_EVENT_MASK_EXPOSURE |
 		XCB_EVENT_MASK_KEY_PRESS |
 		XCB_EVENT_MASK_KEY_RELEASE;
-	xc->win = xcb_generate_id(xc->conn);
-	xcb_void_cookie_t win_c = xcb_create_window(
-			xc->conn,                        /* Connection    */
-			d,                               /* Depth         */
-			xc->win,                         /* Window ID     */
-			xc->screen.xscreen->root,        /* Parent window */
-			xc->screen.x, xc->screen.y,      /* X, Y          */
-			xc->w, xc->h,                    /* Width, Height */
-			0,                               /* Border width  */
-			XCB_WINDOW_CLASS_INPUT_OUTPUT,   /* Class (?)     */
-			xc->screen.xscreen->root_visual, /* Visual (?)    */
-			mask, values);                   /* mask & values */
+	window = xcb_generate_id(xc.conn);
+	xcb_create_window(xc.conn,                     /* Connection    */
+			get_depth(&xc),                /* Depth         */
+			window,                        /* Window ID     */
+			xc.screen->root,               /* Parent window */
+			geom.x, geom.y,                /* X, Y          */
+			geom.w, geom.h,                /* Width, Height */
+			0,                             /* Border width  */
+			XCB_WINDOW_CLASS_INPUT_OUTPUT, /* Class (?)     */
+			xc.screen->root_visual,        /* Visual (?)    */
+			mask, values);                 /* mask & values */
 
 	/* Configure the window */
 	mask = XCB_CONFIG_WINDOW_STACK_MODE;
 	values[0] = XCB_STACK_MODE_ABOVE;
-	xcb_configure_window(xc->conn, xc->win, mask, values);
+	xcb_configure_window(xc.conn, window, mask, values);
 
 	/* Setup pixmap */
-	xc->pm = xcb_generate_id(xc->conn);
-	xcb_create_pixmap(xc->conn,                      /* Connection    */
-			d,                               /* Depth         */
-			xc->pm,                          /* Pixmap id     */
-			xc->screen.xscreen->root,        /* Drawable      */
-			xc->w,                           /* Width         */
-			xc->h);                          /* Height        */
+	resize_canvas(&xc, geom.w, geom.h);
 
 	/* Show window */
-	xcb_map_window(xc->conn, xc->win);
-	xcb_flush(xc->conn);
-
-	return 0;
-}
-int init_x_context(struct x_context* xc)
-{
-	uint32_t mask, values[16];
-	/* Connect to X server. */
-	xc->conn = xcb_connect(NULL, NULL); /* TODO use args */
-	if (xc->conn == NULL || xcb_connection_has_error(xc->conn)) {
-		perror("Failed to connect to X server.");
-		return 1;
-	}
-
-	if (scan_screens(xc)) {
-		perror("Failed to get information about the screens.");
-		return 1;
-	}
-
-	/* Setup font */
-	xc->key_symbols = xcb_key_symbols_alloc(xc->conn);
-	xc->font.xcb_font = xcb_generate_id(xc->conn);
-	xcb_open_font(xc->conn, xc->font.xcb_font,
-			strlen(xc->config.font), xc->config.font);
-
-	/* Setup Graphic Context */
-	xc->gc = xcb_generate_id(xc->conn);
-	mask = XCB_GC_FOREGROUND | XCB_GC_BACKGROUND | XCB_GC_FONT;
-	values[0] = xc->screen.xscreen->black_pixel;
-	values[1] = xc->screen.xscreen->white_pixel;
-	values[2] = xc->font.xcb_font;
-	xcb_create_gc(xc->conn, xc->gc, xc->screen.xscreen->root, mask, values);
-
-	/* Get font height */
-	xcb_query_font_cookie_t font_cookie = xcb_query_font(
-			xc->conn, xc->gc);
-	xcb_query_font_reply_t *font_info = xcb_query_font_reply(
-			xc->conn, font_cookie, NULL);
-	if (font_info == NULL) {
-		perror("Failed to get font information.");
-		return 1;
-	}
-	xc->font.height = font_info->max_bounds.ascent
-		+ font_info->max_bounds.descent;
-	//printf("%d %d\n", font_info->max_bounds.ascent,
-	//		font_info->max_bounds.descent);
-	free(font_info);
-
-	if(init_window(xc))
-		return 1;
+	xcb_map_window(xc.conn, window);
+	xcb_flush(xc.conn);
 
 	return 0;
 }
 
-void handle_expose(struct x_context *xc, xcb_expose_event_t *e)
+void handle_expose(xcb_expose_event_t *e)
 {
 	uint16_t x = border;
 	uint16_t y = border - 2; // TODO magic "2" ?
@@ -174,84 +110,86 @@ void handle_expose(struct x_context *xc, xcb_expose_event_t *e)
 	size_t len = strlen(buffer);
 
 	/* clean */
-	set_background(xc, get_color(xc, normal_bg_color));
-	set_foreground(xc, get_color(xc, normal_bg_color));
-	xcb_rectangle_t r = { 0, 0, xc->w, xc->h};
-	xcb_poly_fill_rectangle(xc->conn, xc->pm, xc->gc, 1, &r);
+	set_background(&xc, get_color(&xc, normal_bg_color));
+	set_foreground(&xc, get_color(&xc, normal_bg_color));
+
+	// TODO move to draw.c
+	xcb_rectangle_t r = { 0, 0, geom.w, geom.h};
+	xcb_poly_fill_rectangle(xc.conn, xc.pm, xc.gc, 1, &r);
 
 	/* draw prompt */
-	set_foreground(xc, get_color(xc, prompt_fg_color));
-	x += draw_text8_gw(xc, prompt, x, y);
+	set_foreground(&xc, get_color(&xc, prompt_fg_color));
+	x += draw_text8_gw(&xc, prompt, x, y);
 	cursor_x = x;
 
 	/* draw buffer */
-	set_foreground(xc, get_color(xc, normal_fg_color));
-	x += draw_ntext8_gw(xc, buffer, (len < highlight) ? len : highlight, x, y);
+	set_foreground(&xc, get_color(&xc, normal_fg_color));
+	x += draw_ntext8_gw(&xc, buffer, (len < highlight) ? len : highlight,
+			x, y);
 	if (highlight < strlen(buffer)) {
-		set_background(xc, get_color(xc, hlight_bg_color));
-		set_foreground(xc, get_color(xc, hlight_fg_color));
-		draw_text8(xc, buffer + highlight, x, y);
+		set_background(&xc, get_color(&xc, hlight_bg_color));
+		set_foreground(&xc, get_color(&xc, hlight_fg_color));
+		draw_text8(&xc, buffer + highlight, x, y);
 	}
 
 	/* draw cursor */
-	cursor_x += get_ntext8_width(xc, buffer, cursor);
+	cursor_x += get_ntext8_width(&xc, buffer, cursor);
 	if (cursor <= highlight) {
-		set_foreground(xc, get_color(xc, normal_fg_color));
+		set_foreground(&xc, get_color(&xc, normal_fg_color));
 	} else {
-		set_foreground(xc, get_color(xc, hlight_fg_color));
+		set_foreground(&xc, get_color(&xc, hlight_fg_color));
 	}
-	draw_line(xc, cursor_x, y + 2, cursor_x, y + xc->font.height);
+	draw_line(&xc, cursor_x, y + 2, cursor_x, y + xc.font.height);
 
 	/* copy pixmap */
-	xcb_copy_area(xc->conn, xc->pm, xc->win, xc->gc, 0, 0, 0, 0,
-			xc->w, xc->h);
-	xcb_flush(xc->conn);
+	xcb_copy_area(xc.conn, xc.pm, window, xc.gc, 0, 0, 0, 0,
+			geom.w, geom.h);
+	xcb_flush(xc.conn);
 }
 
-void handle_keypress(struct x_context *xc, xcb_key_press_event_t *e)
+int special_keypress(xcb_key_press_event_t *e)
 {
 	size_t len;
 	int i, col = 0;
 	xcb_keysym_t ksym;
 
 	/* check shift-independent keys */
-	ksym = xcb_key_symbols_get_keysym(xc->key_symbols, e->detail, col);
+	ksym = xcb_key_symbols_get_keysym(xc.key_symbols, e->detail, col);
 	switch (ksym) {
 	case XK_Return:
 		printf("%s\n", buffer);
 	case XK_Escape:
 		loop = 0;
-		return;
+		break;
 	case XK_Shift_L:
 	case XK_Shift_R:
 		shift_down = 1;
-		return;
+		break;
 	case XK_Num_Lock: /* TODO */
 		numlock_down = 1;
-		printf("NL down\n");
-		return;
+		break;
 	case XK_Left:
 		if (cursor)
 			cursor--;
 		highlight = -1;
-		return;
+		break;
 	case XK_Right:
 		if (cursor < strlen(buffer)) {
 			cursor++;
 		}
 		highlight = -1;
-		return;
+		break;
 	case XK_Home:
 		cursor = 0;
 		highlight = -1;
-		return;
+		break;
 	case XK_End:
 		cursor = strlen(buffer);
 		highlight = -1;
-		return;
+		break;
 	case XK_BackSpace:
 		if (!cursor)
-			return;
+			break;
 		highlight = -1;
 		cursor--;
 	case XK_Delete:
@@ -259,15 +197,14 @@ void handle_keypress(struct x_context *xc, xcb_key_press_event_t *e)
 			buffer[i] = buffer[i + 1];
 		}
 		highlight = -1;
-		return;
+		break;
 	case XK_Tab:
 		len = strlen(buffer);
 		if (list == NULL || highlight == -1) {
 			free_list(list);
-			list = extern_complete("complete.sh", buffer);
+			list = extern_complete(complete_cmd, buffer);
 		}
 		if (next(list)) {
-			//strcpy(buffer, list->cur->name);
 			if (highlight == -1)
 				highlight = len;
 			char *it;
@@ -283,16 +220,28 @@ void handle_keypress(struct x_context *xc, xcb_key_press_event_t *e)
 			cursor = strlen(buffer);;
 		}
 
-		return; 
+		break; 
+	default:
+		return 1;
 	}
+	return 0;
+}
+
+void handle_keypress(xcb_key_press_event_t *e)
+{
+	if (!special_keypress(e))
+		return;
 
 	/* shift-dependent keys */
 	/* TODO check col=2 and col=3 */
-	col = shift_down;
-	ksym = xcb_key_symbols_get_keysym(xc->key_symbols, e->detail, col);
+	int col = shift_down;
+	xcb_keysym_t ksym = xcb_key_symbols_get_keysym(xc.key_symbols,
+			e->detail, col);
+
 	/* isgraph can't handle value greater than ushort max */
 	if (ksym < 128 && (isgraph(ksym) || isspace(ksym))) {
-		len = strlen(buffer);
+		int i;
+		size_t len = strlen(buffer);
 		if ((len + 1) < sizeof(buffer)) {
 			for (i = len; i >= cursor; i--) {
 				buffer[i + 1] = buffer[i];
@@ -304,11 +253,11 @@ void handle_keypress(struct x_context *xc, xcb_key_press_event_t *e)
 	}
 }
 
-void handle_keyrelease(struct x_context *xc, xcb_key_release_event_t *e)
+void handle_keyrelease(xcb_key_release_event_t *e)
 {
 	int col = 0;
 	xcb_keysym_t ksym = xcb_key_symbols_get_keysym(
-			xc->key_symbols, e->detail, col);
+			xc.key_symbols, e->detail, col);
 	switch(ksym) {
 	case XK_Shift_L:
 	case XK_Shift_R:
@@ -321,44 +270,23 @@ void handle_keyrelease(struct x_context *xc, xcb_key_release_event_t *e)
 	}
 }
 
-void cleanup_x_context(struct x_context *xc)
-{
-	if (xc->key_symbols)
-		xcb_key_symbols_free(xc->key_symbols);
-	if (xc->pm)
-		xcb_free_pixmap(xc->conn, xc->pm);
-	if (xc->gc)
-		xcb_free_gc(xc->conn, xc->gc);
-	if (xc->conn) {
-		xcb_disconnect(xc->conn);
-		xc->conn = NULL;
-	}
-}
-
 int main(int argc, char **argv)
 {
 	int rc = 0;
-	struct x_context xc;
+
+	/* TODO Parse command line options */
+
+	/* Initialize X context */
 	memset(&xc, 0, sizeof(xc));
-
-	/* Parse command line options */
-	if (parse_opts(&xc, argc, argv))
+	if (init_x())
 		goto error;
-	if (xc.config.help) {
-		show_help(stdout);
-		goto exit;
-	}
-
-	if (init_x_context(&xc)) {
-		goto error;
-	}
 
 	/* Grab the keyboard */
 	/* TODO add a limit */
-	handle_expose(&xc, NULL);
+	handle_expose(NULL);
 	while (1) {
 		xcb_grab_keyboard_cookie_t grabc = xcb_grab_keyboard(
-				xc.conn, 1, xc.screen.xscreen->root,
+				xc.conn, 1, xc.screen->root,
 				XCB_TIME_CURRENT_TIME, XCB_GRAB_MODE_ASYNC,
 				XCB_GRAB_MODE_ASYNC);
 		xcb_grab_keyboard_reply_t *grabr = xcb_grab_keyboard_reply(
@@ -380,16 +308,15 @@ int main(int argc, char **argv)
 		switch (event->response_type & ~0x80) {
 		/* TODO improve how a handler notify to quit */
 		case XCB_EXPOSE:
-			handle_expose(&xc, (xcb_expose_event_t*) event);
+			handle_expose((xcb_expose_event_t*) event);
 			break;
 		case XCB_KEY_PRESS:
-			handle_keypress(&xc, (xcb_key_press_event_t*) event);
+			handle_keypress((xcb_key_press_event_t*) event);
 			/* redraw to reflect changes */
-			handle_expose(&xc, NULL);
+			handle_expose(NULL);
 			break;
 		case XCB_KEY_RELEASE:
-			handle_keyrelease(&xc,
-					(xcb_key_release_event_t*) event);
+			handle_keyrelease((xcb_key_release_event_t*) event);
 			break;
 		}
 		free(event);
@@ -398,7 +325,7 @@ int main(int argc, char **argv)
 exit:
 	free_list(list);
 	xcb_ungrab_keyboard(xc.conn, XCB_TIME_CURRENT_TIME);
-	cleanup_x_context(&xc);
+	free_x_context(&xc);
 	return rc;
 error:
 	rc = 1;

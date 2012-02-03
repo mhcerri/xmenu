@@ -1,80 +1,103 @@
+#define _GNU_SOURCE
 #include <stdlib.h>
-#include <string.h>
 #include <stdio.h>
+#include <unistd.h>
+#include <ctype.h>
+#include <errno.h>
+#include <string.h>
 #include <sys/types.h>
-#include <dirent.h>
+#include <sys/wait.h>
 #include "complete.h"
 
-const char *words[] = {
-	"apple",
-	"banana",
-	"blueberry",
-	"melon",
-	"orange",
-	"pineapple",
-	"strawberry",
-	"watermelon",
-	NULL
-};
 
-int complete(char *buffer, size_t size)
+void free_list(struct list *list)
 {
-	int len, i, j;
-	const char sep = ':';
-	char *var;
-	const char *path;
-
-	path = getenv("PATH");
-	if (path == NULL)
-		return 1;
-
-	len = strlen(path);
-	var = malloc(len + 1);
-	if (var == NULL)
-		return 1;
-
-	while (1) {
-		j = 0;
-		for (; path[i]; i++, j++) {
-			if (path[i] == sep) {
-				break;
-			} else {
-				var[j] = path[i];
-			}
-		}
-		var[j] = 0;
-
-		if (complete_dir(buffer, size, var) == 0) {
-			free(var);
-			return 0;
-		}
-
-		if (path[i] == 0)
-			break;
-		i++;
+	if (list == NULL)
+		return;
+	struct node *it = list->head;
+	while (it) {
+		struct node *next = it->next;
+		free(it->name);
+		free(it);
+		it = next;
 	}
-	free(var);
-	return 1;
+	free(list);
 }
 
-int complete_dir(char *buffer, size_t size, const char *dirpath)
+struct list *extern_complete(const char *cmd, const char *input)
 {
-	size_t len;
-	struct dirent *entry;
+	/* resouces that must be released */
+	char *line = NULL;
+	struct list *list = NULL;
+	FILE *fh = NULL;
 
-	DIR *dir = opendir(dirpath);
-	if (dir == NULL)
-		return 1;
+	int fds[2];
+	if (pipe(fds))
+		return NULL;
 
-	len = strlen(buffer);
-	while (entry = readdir(dir)) {
-		if (strncmp(buffer, entry->d_name, len) == 0) {
-			strncpy(buffer + len, entry->d_name + len, size - len);
-			closedir(dir);
-			return 0;
+	pid_t pid = fork();
+	if (pid < -1)
+		goto error;
+
+	/* child */
+	if (pid == 0) {
+		dup2(fds[1], 1);
+		close(fds[0]);
+		//execl(cmd, cmd, input, NULL);
+		char b[1024];
+		sprintf(b, "%s \"%s\"", cmd, input);
+		execl("/bin/sh", "sh", "-c", b, NULL);
+		exit(1);
+	}
+
+	/* parent */
+	close(fds[1]);
+
+	list = malloc(sizeof(struct list));
+	if (list == NULL)
+		goto error;
+	list->head = list->tail = list->cur = NULL;
+
+	fh = fdopen(fds[0], "r");
+	if (fh == NULL)
+		goto error;
+
+	ssize_t len;
+	size_t size = 0;
+	while ((len = getline(&line, &size, fh)) > 0) {
+		struct node *node = malloc(sizeof(struct node));
+		if (node == NULL)
+			goto error;
+		if (isspace(line[len - 1]))
+			line[len - 1] = 0;
+		node->name = strdup(line);
+		node->next = NULL;
+		if (list->head == NULL) {
+			list->head = list->tail = node;
+		} else {
+			list->tail->next = node;
+			list->tail = node;
 		}
 	}
-	closedir(dir);
-	return 1;
+
+	int status = 0;
+	waitpid(pid, &status, 0);
+	if (WEXITSTATUS(status)) {
+		free_list(list);
+		list = NULL;
+	}
+
+exit:
+	if (fh)
+		fclose(fh);
+	close(fds[0]);
+	free(line);
+	return list;
+error:
+	printf("Error\n");
+	free_list(list);
+	list = NULL;
+	goto exit;
 }
+
 
