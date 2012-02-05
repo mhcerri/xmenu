@@ -272,7 +272,33 @@ void handle_keypress(xcb_key_press_event_t *e)
 			}
 			buffer[cursor] = ksym;
 			cursor++;
-			highlight = -1;
+			//highlight = -1;
+
+			if (complete_cmd == NULL)
+				return;
+			len = strlen(buffer);
+			//if (list == NULL || highlight == -1) {
+				free_list(list);
+				buffer[cursor] = 0;
+				list = complete(complete_cmd, buffer);
+			//}
+			if (next(list)) {
+				//if (highlight == -1)
+				//	highlight = len;
+				highlight = strlen(buffer);
+				char *it;
+				for (it = buffer; *it; it++)
+					;
+				for(; it != buffer; it--) {
+					if (isspace(*it)) {
+						it++;
+						break;
+					}
+				}
+				strcpy(it, list->cur->name);
+				//cursor = strlen(buffer);;
+			}
+
 		}
 	}
 }
